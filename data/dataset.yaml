@@ -1,0 +1,10 @@
+names:
+- Cracks-sheeling-discoloration
+- Cracks-Scratches
+- Discoloration
+- Shelling
+- Wheel
+nc: 5
+test: test\images
+train: train\images
+val: valid\images
