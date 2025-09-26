@@ -1,0 +1,16 @@
+nc: 4
+names: ['Cracks-Scratches', 'Discoloration', 'Shelling', 'Wheel']
+
+test: test/images
+train: train/images
+val: valid/images
+
+# 증강 설정
+hsv_h: 0.03  # HueSaturationValue의 hue_shift_limit=30에 근사
+hsv_s: 0.8   # sat_shift_limit=40에 근사
+hsv_v: 0.6   # val_shift_limit=30에 근사
+fliplr: 0.5  # HorizontalFlip
+rotate: 15   # ShiftScaleRotate의 rotate_limit=15
+translate: 0.05  # ShiftScaleRotate의 shift_limit
+scale: 0.05  # ShiftScaleRotate의 scale_limit
+mosaic: 0.8  # 모자이크

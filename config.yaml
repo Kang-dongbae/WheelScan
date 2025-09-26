@@ -1,8 +1,0 @@
-train:
-  images: data/images/train
-  labels: data/labels/train
-val:
-  images: data/images/val
-  labels: data/labels/val
-nc: 4
-names: ['Wheel', 'Cracks/Scratches', 'Discoloration', 'Shelling']
