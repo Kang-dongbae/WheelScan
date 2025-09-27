@@ -28,40 +28,70 @@ class YOLOPipeline:
 
     
 def main():
-    # training
+    # Initialize pipeline
     yolo = YOLOPipeline(YOLO_MODEL)
+
+    # Training
+    print("Training model...")
     yolo.train(dataset_yaml_path)
 
-    # 테스트 데이터 평가
+    # Validation
+    print("\nEvaluating validation data...")
+    val_results = yolo.validate(dataset_yaml_path, split='val')
+    
+    # Validation metrics
+    val_box_map = val_results.box.map
+    val_seg_map = val_results.seg.map
+    val_fps = 1000 / val_results.speed['inference']
+    print(f"Validation Bounding Box mAP: {val_box_map:.4f}")
+    print(f"Validation Segmentation mAP: {val_seg_map:.4f}")
+    print(f"Validation Inference Speed (FPS): {val_fps:.2f}")
+
+    print("\nClass-wise Performance (Validation - Bounding Box):")
+    for i, name in val_results.names.items():
+        print(f"Class {name}:")
+        print(f"  AP: {val_results.box.all_ap.mean(axis=1)[i]:.4f}")
+        print(f"  Precision: {val_results.box.p[i]:.4f}")
+        print(f"  Recall: {val_results.box.r[i]:.4f}")
+
+    print("\nClass-wise Performance (Validation - Segmentation):")
+    for i, name in val_results.names.items():
+        print(f"Class {name}:")
+        print(f"  AP: {val_results.seg.all_ap.mean(axis=1)[i]:.4f}")
+
+    # Save validation metrics
+    yolo.save_metrics(val_results, os.path.join(MODEL_DIR, "yolov8n-seg", "val_results.csv"))
+
+    # Test evaluation
     print("\nEvaluating test data...")
     test_results = yolo.validate(dataset_yaml_path, split='test')
+    
+    # Test metrics
+    test_box_map = test_results.box.map
+    test_seg_map = test_results.seg.map
+    test_fps = 1000 / test_results.speed['inference']
+    print(f"Test Bounding Box mAP: {test_box_map:.4f}")
+    print(f"Test Segmentation mAP: {test_seg_map:.4f}")
+    print(f"Test Inference Speed (FPS): {test_fps:.2f}")
 
-    # 메트릭 출력
-    box_map = test_results.box.map
-    seg_map = test_results.seg.map
-    fps = 1000 / test_results.speed['inference']
-    print(f"Test Bounding Box mAP: {box_map:.4f}")
-    print(f"Test Segmentation mAP: {seg_map:.4f}")
-    print(f"Test Inference Speed (FPS): {fps:.2f}")
-
-    print("\nClass-wise Performance (Bounding Box):")
+    print("\nClass-wise Performance (Test - Bounding Box):")
     for i, name in test_results.names.items():
         print(f"Class {name}:")
         print(f"  AP: {test_results.box.all_ap.mean(axis=1)[i]:.4f}")
         print(f"  Precision: {test_results.box.p[i]:.4f}")
         print(f"  Recall: {test_results.box.r[i]:.4f}")
 
-    print("\nClass-wise Performance (Segmentation):")
+    print("\nClass-wise Performance (Test - Segmentation):")
     for i, name in test_results.names.items():
         print(f"Class {name}:")
         print(f"  AP: {test_results.seg.all_ap.mean(axis=1)[i]:.4f}")
 
-    # 메트릭 저장
+    # Save test metrics
     yolo.save_metrics(test_results, os.path.join(MODEL_DIR, "yolov8n-seg", "test_results.csv"))
 
-    # 테스트 데이터 예측 및 시각화
+    # Test data prediction and visualization
     print("\nPredicting on test data...")
-    yolo.predict(os.path.join(DATA_DIR, "test", "images"), MODEL_DIR)  # DATA_DIR 사용
+    yolo.predict(os.path.join(DATA_DIR, "test", "images"), MODEL_DIR)
 
 if __name__ == "__main__":
     main()

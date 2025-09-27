@@ -1,7 +1,7 @@
 task: segment
 mode: train
 model: yolov8n-seg.pt
-data: C:\Dev\WheelScan\data\data.yaml
+data: D:\Dev\WheelScan\data\data.yaml
 epochs: 2
 time: null
 patience: 100
@@ -12,7 +12,7 @@ save_period: -1
 cache: false
 device: cpu
 workers: 8
-project: C:\Dev\WheelScan\models
+project: D:\Dev\WheelScan\models
 name: yolov8n-seg
 exist_ok: true
 pretrained: true
@@ -103,4 +103,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: C:\Dev\WheelScan\models\yolov8n-seg
+save_dir: D:\dev\WheelScan\models\yolov8n-seg
