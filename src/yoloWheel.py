@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from ultralytics import YOLO
-from config import dataset_yaml_path, YOLO_MODEL, MODEL_DIR, HYPERPARAMS
+from config import dataset_yaml_path, YOLO_MODEL, MODEL_DIR, HYPERPARAMS, DATA_DIR
 
 class YOLOPipeline:
     def __init__(self, model_path):
@@ -28,6 +28,7 @@ class YOLOPipeline:
 
     
 def main():
+    # training
     yolo = YOLOPipeline(YOLO_MODEL)
     yolo.train(dataset_yaml_path)
 
