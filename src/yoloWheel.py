@@ -1,14 +1,18 @@
 import os
 import pandas as pd
 from ultralytics import YOLO
+import torch
 from config import dataset_yaml_path, YOLO_MODEL, MODEL_DIR, HYPERPARAMS, DATA_DIR
 
 class YOLOPipeline:
     def __init__(self, model_path):
+        device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+        print(f"Using device: {device}")
         self.model = YOLO(model_path)
 
     def train(self, data_yaml):
-        self.model.train(data=data_yaml, project=MODEL_DIR, name='yolov8n-seg', **HYPERPARAMS)
+        self.model.train(data=data_yaml, project=MODEL_DIR, name='yolov8n-seg', device='mps', **HYPERPARAMS)
+        print("MPS Memory Allocated:", torch.mps.current_allocated_memory() / 1024**2, "MB")
 
     def validate(self, data_yaml, split='val'):
         return self.model.val(data=data_yaml, split=split)
@@ -28,6 +32,11 @@ class YOLOPipeline:
 
     
 def main():
+
+    print("PyTorch Version:", torch.__version__)
+    print("MPS Available:", torch.backends.mps.is_available())
+    print("MPS Built:", torch.backends.mps.is_built())
+    
     # Initialize pipeline
     yolo = YOLOPipeline(YOLO_MODEL)
 
