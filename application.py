@@ -31,7 +31,6 @@ st.markdown("""
             padding-left: 1rem;
             padding-right: 1rem;
         }
-
         .camera-box-content { /* 동영상 박스 스타일 */
             border: 1px solid #ddd;
             border-radius: 5px;
@@ -46,7 +45,6 @@ st.markdown("""
             font-size: 16px;
             margin-top: 5px;
         }
-
         .left-wheel-wrapper {
             padding: 0;
             margin: 0;
