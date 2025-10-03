@@ -14,7 +14,7 @@ YOLO_MODEL = "yolov8n-seg.pt"
 CLASSES = ['Cracks-Scratches', 'Discoloration', 'Shelling', 'Wheel']
 
 HYPERPARAMS = {
-    'epochs': 5,  # GPU....
+    'epochs': 10,  # GPU....
     'batch': 8,
     'imgsz': 640,
     'augment': True,
