@@ -1,12 +1,15 @@
 # app.py
 import os
 import cv2
+import random
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from typing import List, Tuple
 
 import streamlit as st
 from ultralytics import YOLO
+from streamlit_autorefresh import st_autorefresh
 
 # ===============================================
 # (선택) src.config 에서 기본값 가져오기
@@ -33,19 +36,6 @@ st.markdown("""
             text-align: center;
             margin-bottom: 20px;
         }
-        .stContainer {
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 10px;
-            background-color: #f8f9fa;
-            margin-bottom: 15px;
-        }
-        .block-container {
-            padding-top: 2.5rem;
-            padding-bottom: 0rem;
-            padding-left: 1rem;
-            padding-right: 1rem;
-        }
         .camera-box-content {
             border: 1px solid #ddd;
             border-radius: 5px;
@@ -65,7 +55,7 @@ st.markdown("""
 st.markdown('<div class="main-title">KORAIL Wheel Defect Detection System</div>', unsafe_allow_html=True)
 
 # ===============================================
-# 사이드바: 경로/옵션
+# 사이드바
 # ===============================================
 with st.sidebar:
     st.header("Settings")
@@ -88,170 +78,242 @@ except Exception as e:
     st.stop()
 
 # ===============================================
-# 세션 상태 초기화
+# 세션 상태
 # ===============================================
+columns_def = ['Wheel ID', 'Defect Type', 'Confidence', 'Area Ratio', 'Time']
 if 'defects' not in st.session_state:
-    st.session_state.defects = pd.DataFrame(columns=['Wheel ID', 'Defect Type', 'Confidence', 'Area Ratio', 'Time'])
+    st.session_state.defects = pd.DataFrame(columns=columns_def)
 if 'defects_select' not in st.session_state:
     st.session_state.defects_select = None
+
+# 슬라이드쇼 상태
+if 'images_all' not in st.session_state:
+    st.session_state.images_all: List[str] = []    # 절대경로 전체
+if 'order' not in st.session_state:
+    st.session_state.order: List[str] = []         # 셔플된 재생 순서(중복없음)
+if 'cursor' not in st.session_state:
+    st.session_state.cursor: int = 0               # 현재 재생 시작 인덱스
+if 'is_running' not in st.session_state:
+    st.session_state.is_running: bool = False
+if 'pred_cache' not in st.session_state:
+    # key=(abs_path, round(conf,2)) -> {'rows': DataFrame, 'plotted_bgr': np.ndarray}
+    st.session_state.pred_cache = {}
+if 'last_selected_key' not in st.session_state:
+    st.session_state.last_selected_key = None
+
+ALLOWED_DEFECTS = ["cracks-scratches", "discoloration", "shelling"]
+BATCH_SIZE = 6           # 카메라 박스 6개
+TICK_MS = 3000           # 3초 간격
 
 # ===============================================
 # 유틸
 # ===============================================
 def resolve_path(p: str) -> str:
-    """상대 경로를 절대 경로로 보정"""
     if not p:
         return p
     return os.path.abspath(os.path.expanduser(p))
 
-# ===============================================
-# 테스트 폴더 이미지 처리
-# ===============================================
-def process_test_images(test_folder=TEST_FOLDER, min_conf=0.0):
-    defects_list = []
-    ALLOWED_DEFECTS = ["cracks-scratches", "discoloration", "shelling"]
+def list_test_images(folder: str) -> List[str]:
+    folder = resolve_path(folder)
+    if not os.path.exists(folder):
+        return []
+    imgs = [os.path.join(folder, f) for f in os.listdir(folder)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    imgs = [os.path.abspath(x) for x in imgs]
+    return imgs
 
-    if not os.path.exists(test_folder):
-        st.error(f"Test folder '{test_folder}' does not exist.")
-        return pd.DataFrame()
+@st.cache_data(show_spinner=False)
+def predict_cached(abs_path: str, conf: float):
+    """rows(결함 리스트) + 시각화 이미지(박스 포함, BGR) 캐시"""
+    key = (abs_path, round(float(conf), 2))
+    if key in st.session_state.pred_cache:
+        c = st.session_state.pred_cache[key]
+        return c['rows'], c['plotted_bgr']
 
-    image_files = [f for f in os.listdir(test_folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    if not image_files:
-        st.info("No images found in the test folder.")
-        return pd.DataFrame()
+    rows = []
+    results = model.predict(abs_path, conf=conf, verbose=False)
+    img = cv2.imread(abs_path)
+    if img is None:
+        rows_df = pd.DataFrame(rows)
+        plotted_bgr = np.zeros((250, 250, 3), dtype=np.uint8)
+        st.session_state.pred_cache[key] = {'rows': rows_df, 'plotted_bgr': plotted_bgr}
+        return rows_df, plotted_bgr
 
-    progress_bar = st.progress(0)
-    for idx, img_file in enumerate(image_files):
-        img_path = os.path.join(test_folder, img_file)
-        img = cv2.imread(img_path)
-        if img is None:
-            progress_bar.progress((idx + 1) / len(image_files))
+    h, w = img.shape[:2]
+    img_area = float(max(1, h * w))
+
+    for r in results:
+        boxes = r.boxes
+        if boxes is None or len(boxes) == 0:
             continue
+        xyxy = boxes.xyxy.cpu().numpy()
+        confs = boxes.conf.cpu().numpy()
+        clss = boxes.cls.cpu().numpy().astype(int)
+        for b, c, k in zip(xyxy, confs, clss):
+            defect_type = r.names.get(int(k), 'Unknown')
+            if defect_type.strip().lower() not in ALLOWED_DEFECTS:
+                continue
+            x1, y1, x2, y2 = map(float, b)
+            bbox_area = max(0.0, (x2-x1)) * max(0.0, (y2-y1))
+            area_ratio = bbox_area / img_area
+            rows.append({
+                'Wheel ID': os.path.splitext(os.path.basename(abs_path))[0],
+                'Defect Type': defect_type,
+                'Confidence': float(c),
+                'Area Ratio': float(area_ratio),
+                'Time': datetime.now()
+            })
 
-        try:
-            # ✅ conf 임계값(min_conf) 적용
-            results = model.predict(img_path, conf=min_conf, verbose=False)
-        except Exception as e:
-            st.warning(f"Prediction failed on {img_file}: {e}")
-            progress_bar.progress((idx + 1) / len(image_files))
-            continue
+    rows_df = pd.DataFrame(rows)
+    # 요약에서 사용할 박스 포함된 시각화 이미지는 여기서 만들어 캐시해둔다
+    plotted_bgr = results[0].plot(line_width=3, labels=True) if len(results) else img
+    st.session_state.pred_cache[key] = {'rows': rows_df, 'plotted_bgr': plotted_bgr}
+    return rows_df, plotted_bgr
 
-        for result in results:
-            boxes = result.boxes
-            if boxes is not None and len(boxes) > 0:
-                xyxy = boxes.xyxy.cpu().numpy()
-                confs = boxes.conf.cpu().numpy()
-                clss = boxes.cls.cpu().numpy().astype(int)
+def start_run():
+    """버튼 클릭 시 실행 초기화"""
+    images = list_test_images(TEST_FOLDER)
+    if not images:
+        st.warning("📁 테스트 폴더에 이미지가 없습니다.")
+        return
 
-                img_h, img_w = img.shape[:2]
-                img_area = float(img_h * img_w) if img_h * img_w > 0 else 1.0
+    order = images[:]          # 전체를 섞되 재생 중 중복은 없음
+    random.shuffle(order)
 
-                for b, c, k in zip(xyxy, confs, clss):
-                    defect_type = result.names.get(int(k), 'Unknown')
-                    defect_lower = defect_type.strip().lower()
+    st.session_state.images_all = images
+    st.session_state.order = order
+    st.session_state.cursor = 0
+    st.session_state.is_running = True
 
-                    # ✅ Wheel 같은 비결함 클래스 제외
-                    if defect_lower not in ALLOWED_DEFECTS:
-                        continue
+    # 누적 리스트 초기화 (매런 때마다 새로 쌓기)
+    st.session_state.defects = pd.DataFrame(columns=columns_def)
+    st.session_state.defects_select = None
+    st.session_state.last_selected_key = None
 
-                    x1, y1, x2, y2 = map(float, b)
-                    bbox_area = max(0.0, (x2 - x1)) * max(0.0, (y2 - y1))
-                    area_ratio = bbox_area / img_area
-                    wheel_id = os.path.splitext(img_file)[0]
+def advance_once():
+    """3초마다 다음 배치를 화면에 표시하고 해당 배치의 검출 결과를 리스트에 앞에서부터 순차 누적"""
+    if not st.session_state.is_running:
+        return [], False
 
-                    defects_list.append({
-                        'Wheel ID': wheel_id,
-                        'Defect Type': defect_type,
-                        'Confidence': float(c),
-                        'Area Ratio': float(area_ratio),
-                        'Time': datetime.now()
-                    })
+    start = st.session_state.cursor
+    end = min(start + BATCH_SIZE, len(st.session_state.order))
+    batch = st.session_state.order[start:end]
 
-        progress_bar.progress((idx + 1) / len(image_files))
+    # 현재 배치 이미지들에 대해 검출 → 순서대로 누적
+    appended = []
+    for p in batch:
+        rows_df, _ = predict_cached(p, conf_threshold)  # 재생 중엔 박스 없는 원본만 보여줄 거라 시각화는 안 쓰지만 캐시에 저장됨
+        if not rows_df.empty:
+            appended.append(rows_df)
 
-    progress_bar.empty()
-    return pd.DataFrame(defects_list)
+    if appended:
+        add_df = pd.concat(appended, ignore_index=True)
+        st.session_state.defects = pd.concat(
+            [st.session_state.defects, add_df],
+            ignore_index=True
+        )
 
+    # 커서 이동
+    st.session_state.cursor = end
+
+    # 종료 판단
+    finished = (st.session_state.cursor >= len(st.session_state.order))
+    if finished:
+        st.session_state.is_running = False
+
+    return batch, finished
 
 # ===============================================
-# 상단 실행 버튼
+# 버튼 동작
 # ===============================================
-if run_btn_top:
-    with st.spinner("🔎 Processing test images..."):
-        new_defects = process_test_images(TEST_FOLDER, conf_threshold)
-        if not new_defects.empty:
-            st.session_state.defects = pd.concat(
-                [st.session_state.defects, new_defects],
-                ignore_index=True
-            )
-            # 표용 데이터는 매번 새로 생성하도록 초기화
-            st.session_state.defects_select = None
-            st.success(f"✅ Detected {len(new_defects)} defects from test images.")
-        else:
-            st.info("🔍 No defects found or no images present.")
+if run_btn_top and not st.session_state.is_running:
+    start_run()
+
+# 재생 중일 때만 3초 오토리프레시
+if st.session_state.is_running:
+    st_autorefresh(interval=TICK_MS, key="tick3s")
 
 # ===============================================
-# 실시간 뷰 (자리 배치용)
+# 실시간 뷰
+#  - 초기에는 빈 박스
+#  - 버튼 후 재생 시작 → 3초마다 다음 6장을 원본(박스 없이) 표출
+#  - 모든 이미지 재생 후 정지
 # ===============================================
 with st.container(border=True):
     left_col_main, right_col_main = st.columns(2)
 
+    #st.markdown("### Real-time Views", unsafe_allow_html=True)
+
+    # 이번 틱에 보여줄 배치를 가져오고(검출/누적 포함), 끝났는지 반환
+    if st.session_state.is_running:
+        batch_paths, finished = advance_once()
+    else:
+        batch_paths, finished = [], False
+
+    # 좌/우 3개씩 채우기 (원본 이미지로만 표시)
+    def show_plain_image(path):
+        img = cv2.imread(path)
+        if img is None:
+            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
+            return
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        st.image(img_rgb, use_container_width=True)
+
     with left_col_main:
         st.markdown('### Left Wheel Views', unsafe_allow_html=True)
-        camera1, camera2, camera3 = st.columns(3)
-        with camera1:
-            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="centered-text-below">Camera #1</div>', unsafe_allow_html=True)
-        with camera2:
-            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="centered-text-below">Camera #2</div>', unsafe_allow_html=True)
-        with camera3:
-            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="centered-text-below">Camera #3</div>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        for i, c in enumerate([c1, c2, c3]):
+            with c:
+                if i < len(batch_paths):
+                    show_plain_image(batch_paths[i])
+                else:
+                    st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="centered-text-below">Camera #{i+1}</div>', unsafe_allow_html=True)
 
     with right_col_main:
         st.markdown('### Right Wheel Views', unsafe_allow_html=True)
-        camera4, camera5, camera6 = st.columns(3)
-        with camera4:
-            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="centered-text-below">Camera #4</div>', unsafe_allow_html=True)
-        with camera5:
-            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="centered-text-below">Camera #5</div>', unsafe_allow_html=True)
-        with camera6:
-            st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="centered-text-below">Camera #6</div>', unsafe_allow_html=True)
+        c4, c5, c6 = st.columns(3)
+        for j, c in enumerate([c4, c5, c6], start=3):
+            with c:
+                idx = j
+                if idx < len(batch_paths):
+                    show_plain_image(batch_paths[idx])
+                else:
+                    st.markdown('<div class="camera-box-content"></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="centered-text-below">Camera #{j+1}</div>', unsafe_allow_html=True)
+
+    if finished:
+        st.success("✅ 모든 이미지 재생이 완료되었습니다.")
 
 st.markdown('---')
 
 # ===============================================
 # Inspection Result
+#  - 재생 중엔 현재까지 누적된 결함들이 순서대로 리스트에 쌓임
+#  - 재생 종료 후에는 전체 결함이 리스트에 표시됨
+#  - 좌측 리스트에서 선택 → 우측 요약(박스 포함) 표시
 # ===============================================
 st.markdown('### Inspection Result', unsafe_allow_html=True)
 selected_row = None
 
 left_bt_sub, right_bt_sub = st.columns(2)
 
-# --- 서브그리드 1: 리스트 ---
+# --- 좌: 리스트 ---
 with left_bt_sub:
     with st.container(border=True):
-        st.subheader('Defect List')
-        
-        # ✅ defect 개수 표시
         defect_count = len(st.session_state.defects)
         st.subheader(f'Defect List ({defect_count})')
 
         if st.session_state.defects.empty:
             st.write("No defects detected yet.")
         else:
-            # 항상 현재 defects에서부터 표 데이터 생성
             base_df = st.session_state.defects.copy()
             base_df.insert(0, 'Select', False)
 
-            # 이전 선택 복원 (있으면)
+            # 이전 선택 복원
             prev = st.session_state.get('defects_select')
             if prev is not None and 'Select' in prev.columns:
-                key_cols = ['Wheel ID', 'Defect Type', 'Confidence', 'Area Ratio', 'Time']
+                key_cols = columns_def
                 try:
                     base_df = base_df.merge(
                         prev[['Select'] + key_cols],
@@ -267,11 +329,9 @@ with left_bt_sub:
                 base_df,
                 use_container_width=True,
                 hide_index=True,
-                height=380,
+                height=400,
                 column_config={
-                    "Select": st.column_config.CheckboxColumn(
-                        "Select", help="요약을 볼 항목에 체크하세요", default=False
-                    ),
+                    "Select": st.column_config.CheckboxColumn("Select", help="요약을 볼 항목에 체크하세요", default=False),
                     "Wheel ID": st.column_config.TextColumn("Wheel ID", disabled=True),
                     "Defect Type": st.column_config.TextColumn("Defect Type", disabled=True),
                     "Confidence": st.column_config.NumberColumn("Confidence", format="%.2f", disabled=True),
@@ -293,13 +353,16 @@ with left_bt_sub:
             if selected_mask.any():
                 selected_row = edited_df[selected_mask].drop(columns=["Select"]).iloc[0]
 
-# --- 서브그리드 2: 요약 ---
+# --- 우: 요약 ---
 with right_bt_sub:
     with st.container(border=True):
         st.subheader('Selected Item Summary')
 
         if selected_row is None:
-            st.info("왼쪽 리스트에서 항목을 선택하면 요약이 표시됩니다.")
+            if st.session_state.is_running:
+                st.info("재생 중입니다. 좌측 리스트에 검출 결과가 순차적으로 누적됩니다.")
+            else:
+                st.info("왼쪽 리스트에서 항목을 선택하면 요약이 표시됩니다.")
         else:
             wheel_id = selected_row.get("Wheel ID", "-")
             defect_type = selected_row.get("Defect Type", "-")
@@ -307,38 +370,26 @@ with right_bt_sub:
             area = float(selected_row.get("Area Ratio", 0.0))
             time_val = selected_row.get("Time", "-")
 
-            # =====================================
-            # 🧱 1️⃣ 이미지(왼쪽) + 요약(오른쪽)
-            # =====================================
-            img_col, info_col = st.columns([2.5, 1.5])  # 이미지 넓게, 정보 좁게
+            img_col, info_col = st.columns([2.5, 1.5])
 
-            # -------------------
-            # 왼쪽: 결함 표시 이미지
-            # -------------------
+            # 박스 포함 시각화 (요약에서만 표시)
             with img_col:
-                possible_exts = [".jpg", ".jpeg", ".png"]
                 image_path = None
-                for ext in possible_exts:
-                    test_path = os.path.join(TEST_FOLDER, f"{wheel_id}{ext}")
-                    if os.path.exists(test_path):
-                        image_path = test_path
+                for ext in [".jpg", ".jpeg", ".png"]:
+                    p = os.path.join(TEST_FOLDER, f"{wheel_id}{ext}")
+                    if os.path.exists(p):
+                        image_path = os.path.abspath(p)
                         break
-
                 if image_path:
                     try:
-                        results = model.predict(image_path, conf=0.25, verbose=False)
-                        result = results[0]
-                        plotted_img = result.plot(line_width=3, labels=True)
-                        plotted_img_rgb = cv2.cvtColor(plotted_img, cv2.COLOR_BGR2RGB)
-                        st.image(plotted_img_rgb, caption="Detected Defects", use_container_width=True)
+                        _rows, plotted_bgr = predict_cached(image_path, conf_threshold)
+                        plotted_rgb = cv2.cvtColor(plotted_bgr, cv2.COLOR_BGR2RGB)
+                        st.image(plotted_rgb, caption="Detected Defects", use_container_width=True)
                     except Exception as e:
-                        st.warning(f"⚠️ Unable to visualize detection for this image: {e}")
+                        st.warning(f"⚠️ Unable to visualize detection: {e}")
                 else:
                     st.warning(f"⚠️ Image not found for {wheel_id}")
 
-            # -------------------
-            # 오른쪽: 결함 요약 정보
-            # -------------------
             with info_col:
                 st.markdown(f"""
                     <div style="border:1px solid #e5e7eb; border-radius:8px; padding:15px; background:#fafafa;">
@@ -350,8 +401,7 @@ with right_bt_sub:
                             <b>Defect Type:</b> {defect_type}<br>
                             <b>Confidence :</b> {conf:.2f}<br>
                             <b>Area Ratio :</b> {area:.2f}<br>
-                             
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
-                st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
