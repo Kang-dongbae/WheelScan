@@ -1,6 +1,6 @@
 task: segment
 mode: train
-model: yolov8n-seg.pt
+model: /Users/dongbae/Dev/WheelScan/models/yolov8n-seg/weights/best.pt
 data: /Users/dongbae/Dev/WheelScan/data/data.yaml
 epochs: 10
 time: null

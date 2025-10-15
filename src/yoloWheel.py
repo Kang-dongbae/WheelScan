@@ -11,7 +11,7 @@ class YOLOPipeline:
         self.model = YOLO(model_path)
 
     def train(self, data_yaml):
-        self.model.train(data=data_yaml, project=MODEL_DIR, name='yolov8n-seg', device='mps', **HYPERPARAMS)
+        self.model.train(data=data_yaml, project=MODEL_DIR, name='yolov9c', device='mps', **HYPERPARAMS)
         print("MPS Memory Allocated:", torch.mps.current_allocated_memory() / 1024**2, "MB")
 
     def validate(self, data_yaml, split='val'):
