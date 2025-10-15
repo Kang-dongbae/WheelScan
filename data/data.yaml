@@ -1,5 +1,5 @@
-nc: 4
-names: ['Cracks-Scratches', 'Discoloration', 'Shelling', 'Wheel']
+nc: 6
+names: ['crack', 'discoloration', 'flat', 'shelling', 'spalling', 'wheel']
 
 test: test/images
 train: train/images
