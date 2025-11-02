@@ -13,7 +13,7 @@ from pathlib import Path
 # 6: 파인튜닝 (STAGE_FINETUNE)
 # 7: SAHI 추론 (STAGE_INFER)
 # ----------------------------------------------------
-PIPELINE_STAGE = 7  
+PIPELINE_STAGE = 5  
 
 #==================================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -66,34 +66,34 @@ LOGO_IMAGE_PATH = PROJECT_ROOT / "logo.png"
 # =======================
 TRAIN_CFG = dict(
     imgsz=640,
-    epochs=300,
+    epochs=600,
     batch=6,
     workers=4,
     seed=42,
-    patience=30,
+    patience=0,
 
-    box=0.08,
-    cls=0.20,
+    box=0.10,
+    cls=0.22,
     dfl=1.5,
 
-    mosaic=0.90,
-    copy_paste=0.40,
-    mixup=0.1,
-    erasing=0.10,
+    mosaic=0.5,
+    copy_paste=0.15,
+    mixup=0.05,
+    erasing=0.00,
     close_mosaic=10,
 
     degrees=5.0,
     shear=0.0,
     perspective=0.0,
-    translate=0.05,
-    scale=0.60,
-    hsv_h=0.015, hsv_s=0.50, hsv_v=0.40,
+    translate=0.10,
+    scale=0.35,
+    hsv_h=0.015, hsv_s=0.30, hsv_v=0.25,
     fliplr=0.5, flipud=0.0,
 
     rect=True,
     optimizer="AdamW",
-    lr0=0.003,
-    lrf=0.20,
+    lr0=0.0035,
+    lrf=0.15,
     weight_decay=0.0005,
     freeze=0,
     amp=True,
@@ -108,11 +108,13 @@ TRAIN_CFG = dict(
 SAHI_CFG = dict(
     # --- 분할 방식 ---
     # size, count_v
-    SPLIT_FLAG="count_v",
-    SPLIT_VALUE=6,
+    #SPLIT_FLAG="count_v",
+    #SPLIT_VALUE=6,
+    SPLIT_FLAG="size",
+    SPLIT_VALUE=640,
 
-    overlap_h=0.10,   # 세로 겹침
-    overlap_w=0.00,   # 가로 겹침 (count_v 0.0
+    overlap_h=0.20,   # 세로 겹침
+    overlap_w=0.20,   # 가로 겹침 (count_v 0.0
     
     # 추론 설정
     conf_thres=0.5,
@@ -126,15 +128,27 @@ SAHI_CFG = dict(
 # =======================
 FT_TRAIN_CFG = TRAIN_CFG.copy() 
 FT_TRAIN_CFG.update(dict(
-    box=4.0,     
-    cls=0.3,     
+       # losses
+    box=0.10,     # ← 되돌리기
+    cls=0.30,     # flat 구분 강화
+    dfl=1.5,
+
+    # schedule
     lr0=0.0005,
+    lrf=0.10,     # 파인튜닝엔 더 강한 decay
     epochs=100,
+    patience=50,
+
+    # augment (완화)
+    mosaic=0.20,
+    copy_paste=0.20,
+    mixup=0.03,
+    erasing=0.0,
 ))
 
 # =======================
 # 3단계 학습결과, 파인튜닝 경로 설정 (FT_PATHS)
-PREV_BEST_WEIGHTS_FOR_FT = STAGE3_DIR / "fine2" / "weights" / "best.pt"
+PREV_BEST_WEIGHTS_FOR_FT = STAGE3_DIR / "weights" / "best.pt"
 # 파인튜닝 결과 저장 경로
 STAGE3_FT_DIR = STAGE3_DIR / "fine_tuned"
 
