@@ -43,7 +43,7 @@ def stage4_infer_yolo_with_sahi(
         raise FileNotFoundError(f"크롭 테스트 이미지가 없습니다: {cropped_test_split/'images'}")
 
     try:
-        font = ImageFont.truetype("DejaVuSans.ttf", 14)
+        font = ImageFont.truetype("DejaVuSans.ttf", 50)
     except Exception:
         font = None
 
@@ -108,7 +108,7 @@ def stage4_infer_yolo_with_sahi(
                 draw = ImageDraw.Draw(vis)
                 for op in res.object_prediction_list:
                     x1, y1, x2, y2 = map(int, op.bbox.to_voc_bbox())
-                    draw.rectangle([(x1, y1), (x2, y2)], outline=(255, 0, 0), width=2)
+                    draw.rectangle([(x1, y1), (x2, y2)], outline=(255, 0, 0), width=6)
 
                     cls_name = getattr(op.category, "name", None)
                     cls_id = getattr(op.category, "id", None)

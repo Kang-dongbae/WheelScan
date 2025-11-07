@@ -13,7 +13,7 @@ from pathlib import Path
 # 6: 파인튜닝 (STAGE_FINETUNE)
 # 7: SAHI 추론 (STAGE_INFER)
 # ----------------------------------------------------
-PIPELINE_STAGE = 5  
+PIPELINE_STAGE = 7
 
 #==================================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -76,7 +76,7 @@ TRAIN_CFG = dict(
     cls=0.22,
     dfl=1.5,
 
-    mosaic=0.5,
+    mosaic=0.25,
     copy_paste=0.15,
     mixup=0.05,
     erasing=0.00,
@@ -108,16 +108,16 @@ TRAIN_CFG = dict(
 SAHI_CFG = dict(
     # --- 분할 방식 ---
     # size, count_v
-    #SPLIT_FLAG="count_v",
-    #SPLIT_VALUE=6,
-    SPLIT_FLAG="size",
-    SPLIT_VALUE=640,
+    SPLIT_FLAG="count_v",
+    SPLIT_VALUE=6,
+    #SPLIT_FLAG="size",
+    #SPLIT_VALUE=640,
 
     overlap_h=0.20,   # 세로 겹침
     overlap_w=0.20,   # 가로 겹침 (count_v 0.0
     
     # 추론 설정
-    conf_thres=0.5,
+    conf_thres=0.8,
     postprocess="NMS",
     match_metric="IOU",
     match_thres=0.45
@@ -126,31 +126,38 @@ SAHI_CFG = dict(
 # =======================
 # 💡 파인튜닝 설정 (FT_CFG)
 # =======================
-FT_TRAIN_CFG = TRAIN_CFG.copy() 
+FT_TRAIN_CFG = TRAIN_CFG.copy()
 FT_TRAIN_CFG.update(dict(
-       # losses
-    box=0.10,     # ← 되돌리기
-    cls=0.30,     # flat 구분 강화
+    # 손실 비중
+    box=0.10,
+    cls=0.34,    
     dfl=1.5,
+    
+    # 학습 스케줄
+    lr0=6e-4,   
+    lrf=0.10,     
+    epochs=40,
+    patience=20,
+    weight_decay=5e-4,
+    freeze=0,
 
-    # schedule
-    lr0=0.0005,
-    lrf=0.10,     # 파인튜닝엔 더 강한 decay
-    epochs=100,
-    patience=50,
-
-    # augment (완화)
+    # 강화된 증강 설정
     mosaic=0.20,
-    copy_paste=0.20,
-    mixup=0.03,
-    erasing=0.0,
+    copy_paste=0.30,   
+    mixup=0.10,
+    erasing=0.10,
+    copy_paste_mode='flip',
+    label_smoothing=0.03
 ))
+
 
 # =======================
 # 3단계 학습결과, 파인튜닝 경로 설정 (FT_PATHS)
 PREV_BEST_WEIGHTS_FOR_FT = STAGE3_DIR / "weights" / "best.pt"
 # 파인튜닝 결과 저장 경로
-STAGE3_FT_DIR = STAGE3_DIR / "fine_tuned"
+STAGE3_FT_DIR = STAGE3_DIR / "fine_tuned4"
 
 WHEEL_MODEL = STAGE1_DIR / "weights" / "best.pt"
 DEFECT_MODEL = PREV_BEST_WEIGHTS_FOR_FT
+
+INFER_WEIGHTS_PATH = None
