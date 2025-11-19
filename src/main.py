@@ -3,12 +3,14 @@ import config as cfg
 from data_preparation import (
     stage2_tile_all_with_sahi, 
     create_iterative_splits, 
-    oversample_tiles_for_2_loops
+    oversample_tiles_for_2_loops, 
+    create_balanced_baseline_splits
 )
 from training import (
     stage1_train_p2, 
     stage3_train_defect_on_tiles, 
-    run_fine_tuning
+    run_fine_tuning,
+    evaluate_fixed_conf
 )
 from inference import stage4_infer_yolo_with_sahi
 
@@ -92,9 +94,38 @@ def main():
         else:
             print(f" 경고: 추론 가중치 파일을 찾을 수 없습니다: {weights_to_use}")
 
+     # --- 3: 오버샘플링 (정상 포함) ---
+    elif stage == 8:
+        final_path = create_balanced_baseline_splits(
+            cfg.NUM_EMPTY_TILES_BASELINE,
+            cfg.BASELINE_TRAIN_RATIO
+        )
+        print(f"\n[8단계] 최종 데이터셋 생성 완료: {final_path}")
+    
+    elif stage == 9:
+        final_path = evaluate_fixed_conf(
+            cfg.DEFECT_MODEL_PATH,
+            cfg.DATA_YAML_TILES,
+            conf_star=0.593485,
+            iou_thr=0.55,
+            stage_name="stage2"
+        )
+        print(f"\n[9단계] 최종 데이터셋 생성 완료: {final_path}")
+
+    elif stage == 10:
+        final_path = evaluate_fixed_conf(
+            cfg.DEFECT_MODEL_PATH,
+            cfg.DATA_YAML_TILES,
+            conf_star=0.593485,
+            iou_thr=0.55,
+            stage_name="stage2"
+        )
+        print(f"\n[9단계] 최종 데이터셋 생성 완료: {final_path}")
+
     else:
         print(f" [에러] config.PIPELINE_STAGE에 설정된 값('{stage}')이 유효하지 않습니다. 0~7 사이의 숫자를 입력하세요.")
 
 
+    
 if __name__ == "__main__":
     main()

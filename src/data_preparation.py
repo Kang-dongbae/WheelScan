@@ -121,9 +121,9 @@ def stage2_tile_all_with_sahi(keep_empty: bool = True, min_side_px: int = 2, min
     print("\n=== [2단계] SAHI 타일 분할 시작 (단일 출력 모드) =====")
     
     # 설정에서 경로 가져오기
-    tile_one_split(cfg.CROP_TRAIN)
-    tile_one_split(cfg.CROP_VAL)
-    tile_one_split(cfg.CROP_TEST)
+    tile_one_split(cfg.CROP_ROOT)
+    #tile_one_split(cfg.CROP_VAL)
+    #tile_one_split(cfg.CROP_TEST)
     
     print(f"[2단계 완료] 타일 데이터셋 root: {cfg.TILE_ROOT}")
     print(f" - 출력 폴더: {dst_img_root.parent}")
@@ -353,3 +353,102 @@ def oversample_tiles_for_2_loops(tile_root: Path = cfg.TILE_ROOT, final_root: Pa
 
     print(f"\n✅ [2.6단계] 데이터셋 생성 완료! 출력 경로: {final_root}")
     return final_root
+
+# =======================
+# [3단계] 오버샘플링 - 결함 + 정상 2000개 (Baseline)
+# =======================
+
+def create_balanced_baseline_splits(num_empty_to_use: int = 2000, train_ratio: float = 0.8):
+    """
+    결함 타일은 그대로, 정상 타일은 num_empty_to_use 수량만큼만 랜덤 추출하여
+    Train/Valid로 분할하고 final_root에 복사합니다. (Baseline용)
+    """
+    import config as cfg # 함수 내에서 config 사용을 위해 다시 임포트
+    
+    tile_root = cfg.TILE_ROOT
+    final_root = cfg.FINAL_ROOT
+    
+    label_dir = tile_root / "labels"
+    image_dir = tile_root / "images"
+    
+    if not label_dir.exists():
+        print(f"❌ 오류: 타일 라벨 폴더를 찾을 수 없습니다: {label_dir}")
+        return
+
+    all_label_paths = list(label_dir.glob("*.txt"))
+
+    defect_paths = [] # 결함이 있는 타일 (라벨 파일 내용 있음)
+    empty_paths = []  # 결함이 없는 타일 (라벨 파일 내용 없음)
+    
+    # --- 타일 분리 ---
+    for path in all_label_paths:
+        content = path.read_text().strip()
+        if content:
+            defect_paths.append(path)
+        else:
+            empty_paths.append(path)
+
+    # --- 1. 결함 파일 (오버샘플링 없이 그대로 사용) ---
+    # (original_path, new_stem) 튜플 리스트로 변환. new_stem은 원본 이름과 동일.
+    all_defect_paths = [(path, path.stem) for path in defect_paths] 
+    
+    # --- 2. 정상 파일 수량 조정 ---
+    # 사용자가 지정한 수량만큼 랜덤 추출
+    random.shuffle(empty_paths)
+    
+    # 추출할 수량이 실제 정상 타일 수보다 많으면 전체를 사용
+    num_to_select = min(num_empty_to_use, len(empty_paths))
+    selected_empty_paths = empty_paths[:num_to_select]
+    
+    # 정상 파일은 복제하지 않으므로 new_stem도 original_stem과 동일
+    all_empty_paths = [(path, path.stem) for path in selected_empty_paths]
+
+    # --- 3. 최종 학습 목록 구성 및 분할 ---
+    final_paths_to_split = all_defect_paths + all_empty_paths
+    random.shuffle(final_paths_to_split) 
+
+    split_index = int(len(final_paths_to_split) * train_ratio)
+    
+    train_split = final_paths_to_split[:split_index]
+    valid_split = final_paths_to_split[split_index:]
+
+    print(f"\n--- [Stage 3] Baseline 데이터 분할 결과 ---")
+    print(f"결함 타일 (사용): {len(defect_paths)}개")
+    print(f"정상 타일 (추출/사용): {len(selected_empty_paths)}개 (요청 수량: {num_empty_to_use}개)")
+    print(f"총 학습 데이터: {len(train_split) + len(valid_split)}개")
+    print(f"Train/Valid 분할: {len(train_split)}개 / {len(valid_split)}개 (Train Ratio: {train_ratio*100:.0f}%)")
+    
+    # --- 4. 파일 복사 및 저장 ---
+    train_output_dir = final_root / "train"
+    valid_output_dir = final_root / "valid"
+
+    # 출력 디렉토리 생성
+    (train_output_dir / "images").mkdir(parents=True, exist_ok=True)
+    (train_output_dir / "labels").mkdir(parents=True, exist_ok=True)
+    (valid_output_dir / "images").mkdir(parents=True, exist_ok=True)
+    (valid_output_dir / "labels").mkdir(parents=True, exist_ok=True)
+    
+    def copy_splits(split_list, target_dir):
+        target_img_dir = target_dir / "images"
+        target_lbl_dir = target_dir / "labels"
+        
+        for original_path, new_stem in split_list:
+            original_stem = original_path.stem
+            
+            # 이미지 파일 경로 추정
+            original_image_path = image_dir / f"{original_stem}.jpg"
+            
+            # 파일 존재 확인 및 복사
+            if original_image_path.exists() and original_path.exists():
+                new_image_name = f"{new_stem}.jpg"
+                new_label_name = f"{new_stem}.txt"
+                
+                shutil.copy2(original_image_path, target_img_dir / new_image_name)
+                shutil.copy2(original_path, target_lbl_dir / new_label_name)
+
+    print("\n✅ Train 데이터셋 복사 및 정리 중...")
+    copy_splits(train_split, train_output_dir)
+    print("✅ Valid 데이터셋 복사 및 정리 중...")
+    copy_splits(valid_split, valid_output_dir)
+    
+    print(f"\n✅ 데이터 준비 완료. 최종 데이터셋: {final_root}")

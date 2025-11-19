@@ -75,7 +75,7 @@ header {
 .subtle{color:#6b7280;}
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<div class="main-title">코레일 차륜 결함 검지 시스템(WheelNet AI, 5팀)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">코레일 차륜 결함 검지 시스템(5팀)</div>', unsafe_allow_html=True)
 # -------------------- 세션 기본값 --------------------
 defaults = dict(
     detector=None,
