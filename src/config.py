@@ -17,7 +17,7 @@ from pathlib import Path
 # 10 : 생성형 AI 활용 데이터 증강 (STAGE_GENAI_AUG)
 # 11 : Adaptive slicing (STAGE_CLS_GUIDED_TILE)
 # ----------------------------------------------------
-PIPELINE_STAGE = 5
+PIPELINE_STAGE = 6
 
 # Baseline 학습 시 사용할 정상 타일(Empty Tiles)의 목표 수량
 NUM_EMPTY_TILES_BASELINE = 1500 
@@ -83,7 +83,7 @@ TRAIN_CFG = dict(
 
     # --- Loss Coefficients (기존 값 유지) ---
     box=7.5,
-    cls=1.5,
+    cls=0.5,
     dfl=1.5,
 
     # --- Augmentations DISABLED for Baseline ---
@@ -226,7 +226,9 @@ SAHI_CFG = dict(
 FT_TRAIN_CFG = TRAIN_CFG.copy()
 FT_TRAIN_CFG.update(dict(
     
-    cls=1.00,
+    batch=4,
+    imgsz=1280,
+    epochs=50,
 ))
 
 

@@ -38,6 +38,7 @@ def main():
     # --- 2: SAHI 타일링 ---
     elif stage == 2:
         stage2_tile_all_with_sahi()
+        #stage2_tile_all_with_sahi(use_contact_band=True, band_top_ratio=0.25, band_bottom_ratio=0.75, band_overlap_h=0.5,)
         print(f"\n[2단계] 타일링 완료: {cfg.TILE_ROOT}")
 
     # --- 3: 오버샘플링 (정상 포함) ---

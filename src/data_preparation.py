@@ -21,7 +21,25 @@ import config as cfg # 설정값들 가져오기
 # [2단계] SAHI 타일 분할
 # =======================
 
-def stage2_tile_all_with_sahi(keep_empty: bool = True, min_side_px: int = 2, min_intersection_ratio: float = 0.2):
+from pathlib import Path
+from PIL import Image
+
+def stage2_tile_all_with_sahi(
+    keep_empty: bool = True,
+    min_side_px: int = 2,
+    min_intersection_ratio: float = 0.2,
+    use_contact_band: bool = False,   # True면 contact-band dense slicing 활성화
+    band_top_ratio: float = 0.25,     # H 기준 band 시작 비율 (예: 0.25 -> 25%)
+    band_bottom_ratio: float = 0.75,  # H 기준 band 끝 비율 (예: 0.75 -> 75%)
+    band_overlap_h: float = 0.50,     # band 내부에서 사용할 overlap_h (기본보다 촘촘)
+):
+    """
+    2단계 SAHI 타일링 함수.
+    - 기본: 전체 이미지에 대해 SAHI 1-pass (기존 동작과 동일)
+    - use_contact_band=True 일 때:
+        * 전체 이미지 base slicing + 중앙 contact-band 영역을 한 번 더 촘촘하게 slicing
+        * 두 슬라이스를 합쳐 타일 데이터셋 생성 (train 시 recall 향상을 위한 B2 모드)
+    """
     
     # 설정에서 경로 가져오기
     tile_root = cfg.TILE_ROOT
@@ -33,11 +51,10 @@ def stage2_tile_all_with_sahi(keep_empty: bool = True, min_side_px: int = 2, min
     dst_lbl_root.mkdir(parents=True, exist_ok=True)
 
     def tile_one_split(src_split: Path):
-
         src_img = src_split / "images"
         src_lbl = src_split / "labels"
 
-        exts = (".jpg",".jpeg",".png",".bmp",".tif",".tiff")
+        exts = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
         for ip in sorted(src_img.iterdir()):
             if ip.suffix.lower() not in exts:
                 continue
@@ -45,18 +62,60 @@ def stage2_tile_all_with_sahi(keep_empty: bool = True, min_side_px: int = 2, min
             im = Image.open(ip).convert("RGB")
             W, H = im.size
             
-            # SAHI 파라미터 계산
+            # --- SAHI 기본 파라미터 계산 ---
             slice_h, slice_w, ovh, ovw = compute_slice_params(W, H, sahi_cfg) 
 
-            sliced_list = slice_image(
+            # ---------------------------------------------------
+            # 1) Base slicing (전체 이미지 대상, 기존 SAHI 동작)
+            # ---------------------------------------------------
+            sliced_list: list[dict] = []
+
+            sliced_list_base = slice_image(
                 image=im,
                 slice_height=slice_h,
                 slice_width=slice_w,
                 overlap_height_ratio=ovh,
                 overlap_width_ratio=ovw
             )
+            for s in sliced_list_base:
+                s["mode"] = "base"  # 타일 이름 구분용
+            sliced_list.extend(sliced_list_base)
 
-            # 원본 YOLO 라벨(px 좌표로 변환)
+            # ---------------------------------------------------
+            # 2) Contact-band dense slicing (옵션: use_contact_band)
+            #    - 중앙 레일 접촉부만 더 촘촘하게 슬라이싱
+            # ---------------------------------------------------
+            if use_contact_band:
+                # band 영역 정의 (H 비율 기준)
+                band_y1 = int(H * band_top_ratio)
+                band_y2 = int(H * band_bottom_ratio)
+
+                # 안전하게 클램핑
+                band_y1 = max(0, min(band_y1, H))
+                band_y2 = max(0, min(band_y2, H))
+
+                if band_y2 > band_y1 + 10:  # 최소 높이 10px 이상일 때만 실행
+                    band_img = im.crop((0, band_y1, W, band_y2))
+
+                    sliced_list_band = slice_image(
+                        image=band_img,
+                        slice_height=slice_h,
+                        slice_width=slice_w,
+                        overlap_height_ratio=band_overlap_h,  # 기본보다 촘촘
+                        overlap_width_ratio=ovw,
+                    )
+
+                    # band 내 좌표 → 원본 이미지 좌표로 변환
+                    for s in sliced_list_band:
+                        x0, y0 = s["starting_pixel"]
+                        s["starting_pixel"] = (x0, y0 + band_y1)
+                        s["mode"] = "band"  # 타일 이름 구분용
+
+                    sliced_list.extend(sliced_list_band)
+
+            # ---------------------------------------------------
+            # 3) 원본 YOLO 라벨(px 좌표로 읽기)
+            # ---------------------------------------------------
             ypath = src_lbl / (ip.stem + ".txt")
             boxes = []
             if ypath.exists():
@@ -68,67 +127,92 @@ def stage2_tile_all_with_sahi(keep_empty: bool = True, min_side_px: int = 2, min
                         parts = line.split()
                         cls = int(parts[0])
                         cx, cy, ww, hh = map(float, parts[1:5])
-                        bx = cx*W; by = cy*H; bw = ww*W; bh = hh*H
-                        x1 = bx - bw/2; y1 = by - bh/2
-                        x2 = bx + bw/2; y2 = by + bh/2
-                        boxes.append((cls, x1,y1,x2,y2, bw*bh))  # (cls, x1,y1,x2,y2, area)
 
-            # 각 슬라이스 저장 + 라벨 클리핑/정규화
+                        bx = cx * W
+                        by = cy * H
+                        bw = ww * W
+                        bh = hh * H
+
+                        x1 = bx - bw / 2
+                        y1 = by - bh / 2
+                        x2 = bx + bw / 2
+                        y2 = by + bh / 2
+
+                        boxes.append((cls, x1, y1, x2, y2, bw * bh))  # (cls, x1,y1,x2,y2, area)
+
+            # ---------------------------------------------------
+            # 4) 각 슬라이스 타일 저장 + 라벨 클리핑/정규화
+            # ---------------------------------------------------
             for si in sliced_list:
-                
                 x0, y0 = si["starting_pixel"]
-                # tw_slice, th_slice = si["image"].size 로 인한 에러 대신 slice_w, slice_h 사용
-                tw_slice, th_slice = slice_w, slice_h 
 
-                x1t, y1t = x0 + tw_slice, y0 + th_slice
-                
+                # slice_w, slice_h 기준으로 crop 영역 정의
+                x1t, y1t = x0 + slice_w, y0 + slice_h
+
                 # 원본 이미지에서 타일 자르기
                 crop = im.crop((x0, y0, x1t, y1t))
-                tw, th = crop.size 
+                tw, th = crop.size  # 실제 타일 크기 (경계에서 줄어들 수 있음)
 
                 new_lines = []
-                for (cls, x1,y1,x2,y2, area) in boxes:
-                    ix1 = max(x1, x0); iy1 = max(y1, y0)
-                    ix2 = min(x2, x1t); iy2 = min(y2, y1t)
-                    iw = ix2 - ix1; ih = iy2 - iy1
+                for (cls, x1, y1, x2, y2, area) in boxes:
+                    ix1 = max(x1, x0)
+                    iy1 = max(y1, y0)
+                    ix2 = min(x2, x1t)
+                    iy2 = min(y2, y1t)
+
+                    iw = ix2 - ix1
+                    ih = iy2 - iy1
+
                     if iw <= 0 or ih <= 0:
                         continue
                     if iw < min_side_px or ih < min_side_px:
                         continue
-                    if (iw*ih) / (area + 1e-6) < min_intersection_ratio:
+                    if (iw * ih) / (area + 1e-6) < min_intersection_ratio:
                         continue
 
-                    cx_t = ((ix1 + ix2)/2 - x0) / tw
-                    cy_t = ((iy1 + iy2)/2 - y0) / th
-                    w_t  = iw / tw
-                    w_t = min(max(w_t, 1e-6), 1.0)
-                    h_t  = ih / th
-                    h_t = min(max(h_t, 1e-6), 1.0)
+                    cx_t = ((ix1 + ix2) / 2 - x0) / tw
+                    cy_t = ((iy1 + iy2) / 2 - y0) / th
+                    w_t = iw / tw
+                    h_t = ih / th
 
+                    w_t = min(max(w_t, 1e-6), 1.0)
+                    h_t = min(max(h_t, 1e-6), 1.0)
                     if w_t <= 0 or h_t <= 0:
                         continue
+
                     cx_t = min(max(cx_t, 0.0), 1.0)
                     cy_t = min(max(cy_t, 0.0), 1.0)
 
                     new_lines.append(f"{cls} {cx_t:.6f} {cy_t:.6f} {w_t:.6f} {h_t:.6f}")
 
-                tile_name = f"{ip.stem}_{x0}_{y0}"
+                mode = si.get("mode", "full")
+                if use_contact_band:
+                    tile_name = f"{ip.stem}_{mode}_{x0}_{y0}"
+                else:
+                    tile_name = f"{ip.stem}_{x0}_{y0}"
+
                 crop.save(dst_img_root / f"{tile_name}.jpg", quality=95)
                 with open(dst_lbl_root / f"{tile_name}.txt", "w") as f:
                     if new_lines or keep_empty:
                         f.write("\n".join(new_lines))
 
+    # ============================
+    # 실제 타일링 실행
+    # ============================
     print("\n=== [2단계] SAHI 타일 분할 시작 (단일 출력 모드) =====")
     
-    # 설정에서 경로 가져오기
     tile_one_split(cfg.CROP_ROOT)
-    #tile_one_split(cfg.CROP_VAL)
-    #tile_one_split(cfg.CROP_TEST)
+    # 필요하면 아래 두 줄도 해제해서 val/test까지 타일링
+    # tile_one_split(cfg.CROP_VAL)
+    # tile_one_split(cfg.CROP_TEST)
     
     print(f"[2단계 완료] 타일 데이터셋 root: {cfg.TILE_ROOT}")
     print(f" - 출력 폴더: {dst_img_root.parent}")
     print(f" - 모드: {sahi_cfg['SPLIT_FLAG']}, 값: {sahi_cfg['SPLIT_VALUE']}")
     print(f" - overlap_h: {sahi_cfg['overlap_h']}, overlap_w: {sahi_cfg['overlap_w']}")
+    if use_contact_band:
+        print(f" - Contact band: [{band_top_ratio:.2f}H, {band_bottom_ratio:.2f}H], band_overlap_h={band_overlap_h}")
+
 
 
 # ===============================
