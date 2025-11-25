@@ -201,10 +201,10 @@ def stage2_tile_all_with_sahi(
     # ============================
     print("\n=== [2단계] SAHI 타일 분할 시작 (단일 출력 모드) =====")
     
-    tile_one_split(cfg.CROP_ROOT)
+    #tile_one_split(cfg.CROP_ROOT)
     # 필요하면 아래 두 줄도 해제해서 val/test까지 타일링
-    # tile_one_split(cfg.CROP_VAL)
-    # tile_one_split(cfg.CROP_TEST)
+    #tile_one_split(cfg.CROP_TRAIN)
+    tile_one_split(cfg.CROP_VAL)
     
     print(f"[2단계 완료] 타일 데이터셋 root: {cfg.TILE_ROOT}")
     print(f" - 출력 폴더: {dst_img_root.parent}")

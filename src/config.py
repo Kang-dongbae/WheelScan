@@ -17,7 +17,7 @@ from pathlib import Path
 # 10 : 생성형 AI 활용 데이터 증강 (STAGE_GENAI_AUG)
 # 11 : Adaptive slicing (STAGE_CLS_GUIDED_TILE)
 # ----------------------------------------------------
-PIPELINE_STAGE = 6
+PIPELINE_STAGE = 2
 
 # Baseline 학습 시 사용할 정상 타일(Empty Tiles)의 목표 수량
 NUM_EMPTY_TILES_BASELINE = 1500 
@@ -50,8 +50,8 @@ MODEL_CFG = PROJECT_ROOT / "yolo8m-p2.yaml"
 
 # 휠
 CROP_ROOT = DATA_DIR / "cropped_wheels" # 가정: 크롭 데이터셋 루트
-#CROP_TRAIN = CROP_ROOT / "train"
-#CROP_VAL   = CROP_ROOT / "valid"
+CROP_TRAIN = CROP_ROOT / "train"
+CROP_VAL   = CROP_ROOT / "valid"
 CROP_TEST  = CROP_ROOT / "test"
 
 # 타일링 결과 저장 루트 
@@ -74,9 +74,9 @@ LOGO_IMAGE_PATH = PROJECT_ROOT / "logo.png"
 # 📜 학습 설정 (TRAIN_CFG)
 # =======================
 TRAIN_CFG = dict(
-    imgsz=640,
+    imgsz=1280,
     epochs=300,
-    batch=12,
+    batch=8,
     workers=4,
     seed=42,
     patience=0,
@@ -206,11 +206,11 @@ SAHI_CFG = dict(
     # --- 분할 방식 ---
     # size, count_v
     SPLIT_FLAG="count_v",
-    SPLIT_VALUE=6,
+    SPLIT_VALUE=8,
     #SPLIT_FLAG="size",
     #SPLIT_VALUE=640,
 
-    overlap_h=0.20,   # 세로 겹침
+    overlap_h=0.30,   # 세로 겹침
     overlap_w=0.00,   # 가로 겹침 (count_v 0.0
     
     # 추론 설정
