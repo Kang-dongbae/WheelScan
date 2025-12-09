@@ -4,7 +4,7 @@ from pathlib import Path
 # 파이프라인 실행 설정 (MAIN.PY 제어)
 # =======================
 # ----------------------------------------------------
-# 0: 아무것도 실행 안 함 (STAGE_NONE)
+# 0: 분류기 학습 (STAGE_TRAIN_CLS)
 # 1: 원본 학습 (STAGE_TRAIN_ORIGINAL)
 # 2: SAHI 타일링 (STAGE_TILE)
 # 3: 오버샘플링 (정상 포함) (STAGE_OVERSAMPLE_ALL)
@@ -46,13 +46,15 @@ STAGE3_DIR = MODELS_ROOT / "step3"
 STAGE4_DIR = MODELS_ROOT / "step4"
 
 # YOLO 모델 설정
-MODEL_CFG = PROJECT_ROOT / "yolo8m-p2.yaml"
+#MODEL_CFG = PROJECT_ROOT / "yolo8m-p2.yaml"
+MODEL_CFG = PROJECT_ROOT / "yolov8m-seg.pt"
 
 # 휠
 CROP_ROOT = DATA_DIR / "cropped_wheels" # 가정: 크롭 데이터셋 루트
 CROP_TRAIN = CROP_ROOT / "train"
 CROP_VAL   = CROP_ROOT / "valid"
 CROP_TEST  = CROP_ROOT / "test"
+CROP_YAML = CROP_ROOT / "cropped_data.yaml"
 
 # 타일링 결과 저장 루트 
 TILE_ROOT  = DATA_DIR / "tiles_out"
@@ -73,11 +75,12 @@ LOGO_IMAGE_PATH = PROJECT_ROOT / "logo.png"
 # =======================
 # 📜 학습 설정 (TRAIN_CFG)
 # =======================
+
 TRAIN_CFG = dict(
-    imgsz=1280,
-    epochs=300,
-    batch=8,
-    workers=4,
+    imgsz=640,
+    epochs=100,
+    batch=16,
+    workers=8,
     seed=42,
     patience=0,
 
@@ -87,28 +90,28 @@ TRAIN_CFG = dict(
     dfl=1.5,
 
     # --- Augmentations DISABLED for Baseline ---
-    mosaic=0.20,      
-    copy_paste=0.25,  
-    mixup=0.00,       
+    mosaic=0.0,      
+    copy_paste=0.0,  
+    mixup=0.0,       
     erasing=0.0,
-    close_mosaic=20, 
+    close_mosaic=0, 
 
     degrees=0.0,     
     shear=0.0,
     perspective=0.0,
-    translate=0.05,   
-    scale=0.25,       
-    hsv_h=0.015,       
-    hsv_s=0.3,       
-    hsv_v=0.25,       
-    fliplr=0.5,      
+    translate=0.0,   
+    scale=0.0,       
+    hsv_h=0.0,       
+    hsv_s=0.0,       
+    hsv_v=0.0,       
+    fliplr=0.0,      
     flipud=0.0,
 
     # --- Training Parameters  ---
     rect=False,
     optimizer="AdamW",
-    lr0=0.0015,
-    lrf=0.10,
+    lr0=0.001,
+    lrf=0.01,
     weight_decay=0.0005,
     freeze=0,
     amp=True,
@@ -187,7 +190,7 @@ TRAIN_CFG = dict(
     flipud=0.0,
 
     # --- Training Parameters  ---
-    rect=False,
+    rect=True,
     optimizer="AdamW",
     lr0=0.0015,
     lrf=0.10,
@@ -205,10 +208,10 @@ TRAIN_CFG = dict(
 SAHI_CFG = dict(
     # --- 분할 방식 ---
     # size, count_v
-    SPLIT_FLAG="count_v",
-    SPLIT_VALUE=8,
-    #SPLIT_FLAG="size",
-    #SPLIT_VALUE=640,
+    #SPLIT_FLAG="count_v",
+    #SPLIT_VALUE=8,
+    SPLIT_FLAG="size",
+    SPLIT_VALUE=1280,
 
     overlap_h=0.30,   # 세로 겹침
     overlap_w=0.00,   # 가로 겹침 (count_v 0.0

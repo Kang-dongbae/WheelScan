@@ -1,3 +1,6 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 from pathlib import Path
 import config as cfg
 from data_preparation import (
@@ -7,6 +10,7 @@ from data_preparation import (
     create_balanced_baseline_splits
 )
 from training import (
+    stage0_cls_train,
     stage1_train_p2, 
     stage3_train_defect_on_tiles, 
     run_fine_tuning,
@@ -25,13 +29,16 @@ def main():
 
     # --- 0: 아무것도 실행 안 함 ---
     if stage == 0:
-         print("실행 단계가 '0'(NONE)으로 설정되어, 아무 작업도 실행하지 않습니다.")
+        best_wheel = stage0_cls_train()
+        print(f"\n[1단계] 원본 학습 완료: {best_wheel}")
         
     # --- 1: 원본 학습 ---
     elif stage == 1:
         best_wheel = stage1_train_p2(
-            data_yaml=cfg.DATA_YAML, 
+            data_yaml=cfg.DATA_YAML,
             out_dir=cfg.STAGE1_DIR
+            #data_yaml=cfg.CROP_YAML,
+            #out_dir=cfg.STAGE2_DIR
         )
         print(f"\n[1단계] 원본 학습 완료: {best_wheel}")
         

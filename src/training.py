@@ -6,6 +6,177 @@ from ultralytics import YOLO
 from utils import device_str
 import config as cfg
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, models, transforms
+from torch.utils.data import DataLoader, WeightedRandomSampler
+import numpy as np
+import os
+import time
+import copy
+
+# =========================================================
+# [설정 영역]
+# =========================================================
+DATA_DIR = r"C:\Dev\WheelScan\data\cls_tiles" # 데이터 경로
+MODEL_SAVE_PATH = r"C:\Dev\WheelScan\models\step0\best_classifier.pth"
+BATCH_SIZE = 32
+EPOCHS = 20
+LEARNING_RATE = 0.0001
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# =========================================================
+# [데이터셋 준비]
+# =========================================================
+def get_data_loaders():
+    # 1. 이미지 변환 (Augmentation)
+    # Train에는 다양성을 주기 위해 변형을 가함
+    train_transforms = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(), # 좌우 반전
+        transforms.RandomVerticalFlip(),   # 상하 반전 (차륜은 회전체라 유효)
+        transforms.RandomRotation(15),     # 약간의 회전
+        transforms.ColorJitter(brightness=0.1, contrast=0.1), # 조명 변화 대응
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    # Valid는 원본 그대로 (Resize만)
+    val_transforms = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    # 2. 데이터셋 로드
+    train_dataset = datasets.ImageFolder(os.path.join(DATA_DIR, 'train'), train_transforms)
+    val_dataset = datasets.ImageFolder(os.path.join(DATA_DIR, 'valid'), val_transforms)
+
+    # 클래스 매핑 확인 (알파벳 순서: defect=0, normal=1 일 가능성 높음)
+    print(f"Class Mapping: {train_dataset.class_to_idx}")
+    
+    # 3. [핵심] 불균형 해결: WeightedRandomSampler
+    # 각 클래스의 샘플 개수 확인
+    targets = train_dataset.targets
+    class_counts = np.bincount(targets)
+    
+    print(f"Train Data Counts: {class_counts}") 
+    # 예: [1485, 2227] -> 적은 쪽 가중치를 높임
+    
+    class_weights = 1. / class_counts
+    sample_weights = [class_weights[t] for t in targets]
+    
+    # 샘플러 생성
+    sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
+
+    # 4. 로더 생성
+    # train_loader에는 sampler를 적용 (shuffle=True와 함께 쓰면 안됨)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=sampler, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+
+    return train_loader, val_loader, train_dataset.class_to_idx
+
+
+# =======================
+# [0단계] (옵션) 원본 학습
+# =======================
+def stage0_cls_train():
+    print(f"Using device: {DEVICE}")
+    
+    train_loader, val_loader, class_idx = get_data_loaders()
+    
+    # Defect가 어떤 인덱스인지 확인 (보통 0 아니면 1)
+    defect_idx = class_idx['defect']
+    
+    # 모델 정의 (ResNet18 - 가볍고 성능 좋음)
+    model = models.resnet18(weights='IMAGENET1K_V1')
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, 2) # 2진 분류
+    model = model.to(DEVICE)
+
+    class_weights = torch.tensor([1.0, 1.0]).to(DEVICE)
+    class_weights[defect_idx] = 3.0 
+    
+    print(f"Applying Class Weights: {class_weights}") # 확인용 출력
+    
+    # 가중치가 적용된 CrossEntropyLoss 사용
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    best_recall = 0.0
+    best_model_wts = copy.deepcopy(model.state_dict())
+
+    for epoch in range(EPOCHS):
+        # --- Train Phase ---
+        model.train()
+        running_loss = 0.0
+        
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * inputs.size(0)
+
+        epoch_loss = running_loss / len(train_loader.dataset)
+
+        # --- Valid Phase ---
+        model.eval()
+        val_loss = 0.0
+        
+        # 메트릭 계산 변수
+        tp = 0 # True Positive (결함을 결함이라 맞춤)
+        fn = 0 # False Negative (결함을 정상이라 놓침 - 치명적)
+        fp = 0 # False Positive (정상을 결함이라 오해 - 괜찮음)
+        tn = 0 # True Negative (정상을 정상이라 맞춤)
+
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item() * inputs.size(0)
+                
+                _, preds = torch.max(outputs, 1)
+
+                # 결함(defect_idx)을 Positive로 간주하고 계산
+                for p, l in zip(preds, labels):
+                    if l == defect_idx: # 실제 결함인 경우
+                        if p == defect_idx: tp += 1
+                        else: fn += 1
+                    else: # 실제 정상인 경우
+                        if p == defect_idx: fp += 1
+                        else: tn += 1
+
+        val_loss = val_loss / len(val_loader.dataset)
+        
+        # 지표 계산
+        accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-10)
+        recall = tp / (tp + fn + 1e-10)       # 재현율 (중요)
+        precision = tp / (tp + fp + 1e-10)    # 정밀도
+        
+        print(f"Epoch {epoch+1}/{EPOCHS}")
+        print(f"Train Loss: {epoch_loss:.4f} | Val Loss: {val_loss:.4f}")
+        print(f"Val Acc: {accuracy:.4f} | Precision: {precision:.4f}")
+        print(f"★ Defect Recall: {recall:.4f} (TP:{tp}, FN:{fn})") 
+        print("-" * 30)
+
+        # 모델 저장 기준: Recall이 가장 높을 때 저장 (놓치면 안되니까)
+        # 만약 Recall이 같다면 Accuracy가 높은 순
+        if recall > best_recall:
+            best_recall = recall
+            best_model_wts = copy.deepcopy(model.state_dict())
+            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            print(">> Best Model Saved (Recall Updated)")
+
+    print(f"Training Complete. Best Recall: {best_recall:.4f}")
+    return best_model_wts
+
+
 # =======================
 # [1단계] (옵션) 원본 학습
 # =======================
